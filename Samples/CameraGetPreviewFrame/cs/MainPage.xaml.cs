@@ -10,6 +10,7 @@
 //*********************************************************
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -29,6 +30,8 @@ using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Input;
 using Windows.UI.Xaml.Media.Imaging;
 using Windows.UI.Xaml.Navigation;
+using ZXing;
+using ZXing.Common;
 
 namespace CameraGetPreviewFrame
 {
@@ -64,6 +67,15 @@ namespace CameraGetPreviewFrame
         // Information about the camera device
         private bool _mirroringPreview = false;
         private bool _externalCamera = false;
+
+        BarcodeReader reader = new BarcodeReader
+        {
+            Options = new DecodingOptions
+            {
+                PossibleFormats = new BarcodeFormat[] { BarcodeFormat.QR_CODE },
+                TryHarder = true
+            }
+        };
 
         #region Constructor, lifecycle and navigation
 
@@ -364,7 +376,8 @@ namespace CameraGetPreviewFrame
                 // Add a simple green filter effect to the SoftwareBitmap
                 if (GreenEffectCheckBox.IsChecked == true)
                 {
-                    ApplyGreenFilter(previewFrame);
+                    //ApplyGreenFilter(previewFrame);
+                    AnalyzeBitmap(previewFrame);
                 }
 
                 // Show the frame (as is, no rotation is being applied)
@@ -505,6 +518,75 @@ namespace CameraGetPreviewFrame
                 // Grab the data from the SoftwareBitmap
                 encoder.SetSoftwareBitmap(bitmap);
                 await encoder.FlushAsync();
+            }
+        }
+
+        private unsafe void AnalyzeBitmap(SoftwareBitmap bitmap)
+        {
+            // Effect is hard-coded to operate on BGRA8 format only
+            if (bitmap.BitmapPixelFormat == BitmapPixelFormat.Bgra8)
+            {
+                // In BGRA8 format, each pixel is defined by 4 bytes
+                const int BYTES_PER_PIXEL = 4;
+
+                using (var buffer = bitmap.LockBuffer(BitmapBufferAccessMode.ReadWrite))
+                using (var reference = buffer.CreateReference())
+                {
+                    if (reference is IMemoryBufferByteAccess)
+                    {
+                        // Get a pointer to the pixel buffer
+                        byte* data;
+                        uint capacity;
+                        ((IMemoryBufferByteAccess)reference).GetBuffer(out data, out capacity);
+                        
+                        // Get information about the BitmapBuffer
+                        var desc = buffer.GetPlaneDescription(0);
+
+                        //byte[] target = new byte[desc.Height * desc.Width];
+                        List<byte> target = new List<byte>();
+
+                        // Iterate over all pixels
+                        for (uint row = 0; row < desc.Height; row++)
+                        {
+                            for (uint col = 0; col < desc.Width; col++)
+                            {
+                                // Index of the current pixel in the buffer (defined by the next 4 bytes, BGRA8)
+                                var currPixel = desc.StartIndex + desc.Stride * row + BYTES_PER_PIXEL * col;
+
+                                // Read the current pixel information into b,g,r channels (leave out alpha channel)
+                                var b = data[currPixel + 0]; // Blue
+                                var g = data[currPixel + 1]; // Green
+                                var r = data[currPixel + 2]; // Red
+
+                                byte grey = (byte) ((r + g + b) / 3);
+                                // Boost the green channel, leave the other two untouched
+                                target.Add(grey);
+                                //target.Add(b);
+                                //target.Add(r);
+                                //target.Add(g);
+                                //target[currPixel + 0] = b;
+                                //target[currPixel + 1] = g;
+                                //target[currPixel + 2] = r;
+                            }
+                        }
+
+
+                        //byte* source = data;
+                        //int size = source[0]; // first byte is size;
+                        //byte[] target = new byte[size];
+                        //for (int i = 0; i < size; ++i)
+                        //    target[i] = source[i + 1];
+
+                        Result result = reader.Decode(
+                            target.ToArray(),
+                            (int)bitmap.PixelWidth,
+                            (int)bitmap.PixelHeight,
+                            BitmapFormat.Gray8
+                            );
+
+                        Debug.WriteLine("Result: {0}", result == null ? "<none>" : result.Text);
+                    }
+                }
             }
         }
 
